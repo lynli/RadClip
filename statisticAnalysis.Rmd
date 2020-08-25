@@ -1,17 +1,11 @@
 ---
-title: "statisticAnalysis_CCRsubmission"
+title: "statisticAnalysis"
 author: "Lin Li"
 date: "July 22, 2020"
 output:
   word_document: default
   pdf_document: default
   html_document: default
----
----
-title: "nature communication experiment"
-author: "Lin Li"
-date: "April 12, 2019"
-output: html_document
 ---
 
 ```{r setup, include=FALSE}
