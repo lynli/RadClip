@@ -1,0 +1,768 @@
+---
+title: "statisticAnalysis_CCRsubmission"
+author: "Lin Li"
+date: "July 22, 2020"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+---
+title: "nature communication experiment"
+author: "Lin Li"
+date: "April 12, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(pacman)
+p_load(Hmisc,survival,survminer,rms,survey,SvyNom)
+library(lattice)
+library(ggplot2)
+library(caret)
+library(glmnet)
+library(dplyr)
+library(survival)
+library(survminer)
+library(pROC)
+library(Hmisc)
+library(survcomp)
+library("rms")
+library("survey")
+library("SvyNom")
+library('finalfit')
+library('cmprsk')
+#library(compareC)
+
+
+```
+```{r function1}
+rbind.all.columns <- function(x, y) {
+  
+  x.diff <- setdiff(colnames(x), colnames(y))
+  y.diff <- setdiff(colnames(y), colnames(x))
+  
+  x[, c(as.character(y.diff))] <- NA
+  
+  y[, c(as.character(x.diff))] <- NA
+  
+  return(rbind(x, y))
+}
+
+```
+```{r function2}
+#calculation for CAPRAS
+CAPRAS_CAL <- function(DATA) {
+  DATA$GGG_capra = DATA$pGG
+  DATA$GGG_capra[which(DATA$pGG == 1)] = 0
+  DATA$GGG_capra[which(DATA$pGG == 2)] = 1
+  DATA$GGG_capra[which(DATA$pGG == 3)] = 2
+  DATA$GGG_capra[which(DATA$pGG > 3)] = 3
+  DATA$PSA_capra = DATA$PSA
+  DATA$PSA_capra[which(DATA$PSA <= 6)] = 0
+  DATA$PSA_capra[which((DATA$PSA> 6)&(DATA$PSA<=10))] = 1
+  DATA$PSA_capra[which((DATA$PSA> 10)&(DATA$PSA<=20))] = 2
+  DATA$PSA_capra[which(DATA$PSA >20)] = 3
+  DATA$PSM_capra = DATA$PSM
+  DATA$PSM_capra[which(DATA$PSM == 0)] = 0
+  DATA$PSM_capra[which(DATA$PSM == 1)] = 2
+  DATA$SVI_capra = DATA$SVI
+  DATA$SVI_capra[which(DATA$SVI == 0)] = 0
+  DATA$SVI_capra[which(DATA$SVI == 1)] = 2
+  DATA$EPE_capra = DATA$EPE
+  DATA$EPE_capra[which(DATA$EPE == 0)] = 0
+  DATA$EPE_capra[which(DATA$EPE == 1)] = 1
+  DATA$LVI_capra = DATA$LNI
+  DATA$LVI_capra[which(DATA$LNI == 0)] = 0
+  DATA$LVI_capra[which(DATA$LNI == 1)] = 1
+  CAPRAS = DATA$LVI_capra + DATA$SVI_capra + DATA$EPE_capra + DATA$PSM_capra + DATA$PSA_capra +
+  DATA$GGG_capra
+  return(CAPRAS)
+}
+
+```
+
+```{r function}
+#calculation for CAPRA
+CAPRApre_CAL <- function(DATA) {
+  DATA$GGG_capra = DATA$bGG
+  DATA$GGG_capra[which(DATA$bGG == 1)] = 0
+  DATA$GGG_capra[which(DATA$bGG == 2)] = 1
+  DATA$GGG_capra[which(DATA$bGG >= 3)] = 3
+  DATA$PSA_capra = DATA$PSA
+  DATA$PSA_capra[which(DATA$PSA < 6)] = 0
+  DATA$PSA_capra[which((DATA$PSA>= 6)&(DATA$PSA<10))] = 1
+  DATA$PSA_capra[which((DATA$PSA>= 10)&(DATA$PSA<20))] = 2
+  DATA$PSA_capra[which((DATA$PSA>= 20)&(DATA$PSA<30))] = 3
+  DATA$PSA_capra[which(DATA$PSA>= 30)] = 4
+  DATA$cT_capra = DATA$cT
+  DATA$cT_capra[which(DATA$cT < 2)] = 0
+  DATA$cT_capra[which(DATA$cT == 2)] = 1
+  DATA$posPct_capra = DATA$posPct
+  DATA$posPct_capra[which(DATA$posPct < 0.34)] = 0
+  DATA$posPct_capra[which(DATA$posPct >= 0.34)] = 1
+  DATA$AGE_capra = DATA$AGE
+  DATA$AGE_capra[which(DATA$AGE < 50)] = 0
+  DATA$AGE_capra[which(DATA$AGE >= 50)] = 1
+  CAPRAS = DATA$PSA_capra + DATA$GGG_capra + DATA$AGE_capra + DATA$posPct_capra + DATA$cT_capra
+  return(CAPRAS)
+}
+
+```
+## load the data
+```{r load data}
+currentDir <- getwd()
+CC <- read.csv(file=paste(currentDir,"CC_radiomic_ALL.csv",sep="/"), header=TRUE, sep=",")
+trans = preProcess(CC[,1:1600], c("center","scale"))
+CC[,1:1600] <- predict(trans,CC[,1:1600])
+CC$DATASET = 1
+
+DE <- read.csv(file=paste(currentDir,"DE_radiomic_ALL.csv",sep="/"), header=TRUE, sep=",")
+DE[,1:1600] <- predict(trans,DE[,1:1600])
+DE$DATASET = 2
+
+UH <- read.csv(file=paste(currentDir,"UH_radiomic_ALL.csv",sep="/"), header=TRUE, sep=",")
+UH[,1:1600] <- predict(trans,UH[,1:1600])
+UH$DATASET = 3
+
+MS <- read.csv(file=paste(currentDir,"MS_radiomic_ALL.csv",sep="/"), header=TRUE, sep=",")
+MS[,1:1600] <- predict(trans,MS[,1:1600])
+MS$DATASET = 4
+
+UP <- read.csv(file=paste(currentDir,"UP_radiomic_ALL.csv",sep="/"), header=TRUE, sep=",")
+UP[,1:1600] <- predict(trans,UP[,1:1600])
+UP$DATASET = 5
+
+testRetest.T2 <- read.csv(file=paste(currentDir,"T2_features.csv",sep="/"), header=TRUE, sep=",")
+testRetest.ADC <- read.csv(file=paste(currentDir,"ADC_features_rescale.csv",sep="/"), header=TRUE, sep=",")
+
+```
+
+```{r combine the datasets}
+Alldata_lesion <- rbind.all.columns(CC,DE)
+Alldata_lesion <- rbind.all.columns(Alldata_lesion,UH)
+Alldata_lesion <- rbind.all.columns(Alldata_lesion,UP)
+Alldata_lesion <- rbind.all.columns(Alldata_lesion,MS)
+
+```
+
+
+```{r redundent feature elimination} 
+set.seed(11)
+ALLfeature_lesion <- Alldata_lesion[,1:1600]
+# eliminate features contains NA
+ALLfeature_lesion <- ALLfeature_lesion[ , apply(ALLfeature_lesion, 2, function(x) !any(is.na(x)))]
+feature_cor_lesion <- cor(as.matrix(ALLfeature_lesion))
+hc_lesion = findCorrelation(feature_cor_lesion, cutoff=0.8) #
+hc_lesion = sort(hc_lesion)
+ALLfeature_lesion.new = ALLfeature_lesion[,-c(hc_lesion)]
+selectedvariables <- colnames(ALLfeature_lesion.new)
+
+```
+
+
+```{r check test-retest feature stability}
+T2featNames <- colnames(testRetest.T2)
+ADCfeatNames <- colnames(testRetest.ADC)
+
+testRetest.T2_set1 <- testRetest.T2 %>%
+  filter(DATASET == 1)
+testRetest.T2_set2 <- testRetest.T2 %>%
+  filter(DATASET == 2)
+testRetest.ADC_set1 <- testRetest.ADC %>%
+  filter(DATASET == 1)
+testRetest.ADC_set2 <- testRetest.ADC %>%
+  filter(DATASET == 2)
+
+selectedT2featName <- selectedvariables[which(selectedvariables %in% T2featNames)]
+selectedADCfeatName <- selectedvariables[which(selectedvariables %in% ADCfeatNames)]
+
+
+T2univ_results <- lapply(selectedT2featName,
+                       function(x){ 
+                         comResult <- Hmisc::smean.cl.boot(testRetest.T2_set1[,x ]- testRetest.T2_set2[,x ], conf.int = 0.95, B = 1000)
+                         Lowvalue <- comResult["Lower"]
+                         Uppervalue <- comResult["Upper"]
+                         ifcontain0 <- (Lowvalue*Uppervalue)<0
+                         res<-c(Lowvalue, Uppervalue,ifcontain0)
+                         names(res)<-c("Lower", "Upper", "ifstable") 
+                         return(res)
+                          
+                         })
+
+T2Comres <- data.frame(t(as.data.frame(T2univ_results)))
+
+ADCuniv_results <- lapply(selectedADCfeatName,
+                       function(x){ 
+                         comResult <- Hmisc::smean.cl.boot(testRetest.ADC_set1[,x ]- testRetest.ADC_set2[,x ], conf.int = 0.95, B = 1000)
+                         Lowvalue <- comResult["Lower"]
+                         Uppervalue <- comResult["Upper"]
+                         ifcontain0 <- (Lowvalue*Uppervalue)<0
+                         res<-c(Lowvalue, Uppervalue,ifcontain0)
+                         names(res)<-c("Lower", "Upper", "ifstable") 
+                         return(res)
+                          
+                         })
+
+ADCComres <- data.frame(t(as.data.frame(ADCuniv_results)))
+
+unstableT2featureName <- selectedT2featName[which(T2Comres$ifstable == 0)]
+unstableADCfeatureName <- selectedADCfeatName[which(ADCComres$ifstable == 0)]
+
+```
+
+
+```{r test-retest unstable feature elimination}
+selectedvariables <- selectedvariables[ -which(selectedvariables %in% unstableADCfeatureName)]
+selectedvariables <- selectedvariables[ -which(selectedvariables %in% unstableT2featureName)]
+pre_selectedvariables_lesion <- selectedvariables
+
+```
+
+
+```{r train the BCR predictive model using CC}
+library(caret)
+
+BCR_all <- CC[,1:1600]
+BCR_all$status = CC$BCR
+BCR_all$DATASET = 1 #CC dataset = 1
+BCR_all$time = CC$followup
+BCR_all$PIRADS = CC$PIRADS
+BCR_all$bGG = CC$bGG
+BCR_all$pGG = CC$pGG
+BCR_all$PSA = CC$PSA
+BCR_all$AGE = CC$AGE
+BCR_all= BCR_all[which(BCR_all$time>0),]
+BCR_index = which(!is.na(BCR_all$time))
+train_data <- BCR_all
+```
+
+
+```{r mrmr feature selection}
+library(praznik)
+set.seed(3)
+CV = createMultiFolds(train_data$status, k =3, times = 10)
+CI_train = matrix(,nrow= length(CV), ncol = 10)
+CI_test = matrix(,nrow= length(CV), ncol = 10)
+CVlist<- vector(mode = "list", length = length(CV))
+Flist <- list()
+for (i in c(1:length(CV))) {
+  CV_train = train_data[CV[[i]],pre_selectedvariables_lesion]
+  for (f in c(1:10)) {
+    set.seed(3)
+    tempSlected = MRMR(CV_train, train_data$status[CV[[i]]], k = f)
+    tempTrain = as.data.frame(CV_train[,tempSlected$selection])
+    colnames(tempTrain) = pre_selectedvariables_lesion[tempSlected$selection]
+    tempTrain$time = train_data$time[CV[[i]]]
+    tempTrain$status = train_data$status[CV[[i]]]
+    CV_coxFit_temp = coxph(Surv(time, status)~., data = tempTrain)
+    tempTrain$PI =predict(CV_coxFit_temp, tempTrain, type=c("risk"))
+    CI_train[i,f] = survConcordance(Surv(time, status) ~ PI,tempTrain)$concordance
+    tempTest =train_data[-CV[[i]],]
+    tempTest$time = train_data$time[-CV[[i]]]
+    tempTest$status = train_data$status[-CV[[i]]]
+    tempTest$PI =predict(CV_coxFit_temp, tempTest, type=c("risk"))
+    CI_test[i,f] = survConcordance(Surv(time, status) ~ PI,tempTest)$concordance
+    Flist = append(Flist,tempSlected$selection)
+  }
+  CVlist[i] = list(Flist)
+}
+
+
+##
+selectedIdx_sort <- sort(table(unlist(Flist)),decreasing=T)
+selectedfeatureIDs <-as.numeric(names(selectedIdx_sort[1:5]))
+tempTrain <-BCR_all[, pre_selectedvariables_lesion[selectedfeatureIDs]]
+tempTrain$time = BCR_all$time
+tempTrain$status = BCR_all$status
+best_fit = coxph(Surv(time, status)~., data = tempTrain)
+summary(best_fit)
+
+```
+
+```{r fit a logistic regression to convert radiomic score to  0-1}
+
+train_PI_best = predict(best_fit, CC, type=c("lp"))
+Train_result = data.frame(PI_best = train_PI_best,type = "train",status = train_data$status,time = train_data$time)
+fit_risk_score = glm(status ~ PI_best,family= binomial, Train_result)
+Train_result$RadS = predict(fit_risk_score,Train_result, type=c("response"))
+CC$RadS = Train_result$RadS
+CC$time =CC$followup
+CC$status = CC$BCR
+
+```
+
+```{r multivariate analysis on the training set}
+
+covariates <- c("RadS","PIRADS","bGG", "PSA","AGE")
+variables = paste(covariates , collapse="+")
+
+var_models_BCR <- coxph(as.formula(paste("Surv(time, status)~", variables) ),data = CC) 
+summary(var_models_BCR)
+var_models_BCR%>% finalfit::fit2df(digits = c(3,3,3)) %>% knitr::kable()
+#ggforest(var_models_BCR, data = CC,fontsize = 1,cpositions = c(0, 0.2, 0.4),main = "Hazard ratio, ALL")
+
+
+```
+
+
+
+
+
+
+
+```{r multivariable analysis on the validationset}
+head2head_lesion = rbind.all.columns(MS,UP)
+BCR_Independent_lesion = rbind.all.columns(head2head_lesion,UH)
+DE_index = DE[which(DE$Index == 1),]#get patient wise lesion
+DE_noTreat = DE_index[which(DE_index$treatType ==0),]#get patients without additional treatment
+BCR_Independent_lesion = rbind.all.columns(BCR_Independent_lesion,DE_noTreat)
+BCR_Independent = BCR_Independent_lesion[,1:1600]
+
+BCR_Independent$time = BCR_Independent_lesion$followup
+BCR_Independent$status = BCR_Independent_lesion$BCR
+BCR_Independent$bGG = BCR_Independent_lesion$bGG
+BCR_Independent$pGG = BCR_Independent_lesion$pGG
+BCR_Independent$PIRADS = BCR_Independent_lesion$PIRADS
+BCR_Independent$SVI = BCR_Independent_lesion$SVI
+BCR_Independent$EPE = BCR_Independent_lesion$EPE
+BCR_Independent$PSA = BCR_Independent_lesion$PSA
+BCR_Independent$LNI = BCR_Independent_lesion$LVI
+BCR_Independent$PSM = BCR_Independent_lesion$SM
+BCR_Independent$AGE = BCR_Independent_lesion$AGE
+BCR_Independent$cT = BCR_Independent_lesion$cT
+BCR_Independent$posPct = BCR_Independent_lesion$posPct
+BCR_Independent$Decipher = BCR_Independent_lesion$Decipher
+BCR_Independent$DecipherGroup = ifelse(BCR_Independent_lesion$Decipher<0.45,1,2)
+BCR_Independent$DecipherGroup[which(BCR_Independent_lesion$Decipher>0.6)]=3
+BCR_Independent$DATASET = as.factor(BCR_Independent_lesion$DATASET)
+BCR_Independent$PI_best = predict(best_fit, BCR_Independent, type=c("lp"))
+BCR_Independent$RadS = predict(fit_risk_score, BCR_Independent, type=c("response"))
+
+
+BCR_Independent$CAPRAS = CAPRAS_CAL(BCR_Independent)
+BCR_Independent$CAPRA_pre = CAPRApre_CAL(BCR_Independent)
+
+covariates <- c("RadS","PIRADS","bGG", "PSA","AGE","cT")
+variables = paste(covariates , collapse="+")
+
+var_models_BCR <- coxph(as.formula(paste("Surv(time, status)~", variables) ),data = BCR_Independent) 
+summary(var_models_BCR)
+
+var_models_BCR%>% finalfit::fit2df(digits = c(2,2,2)) %>% knitr::kable()
+#ggforest(var_models_BCR, data = BCR_Independent,fontsize = 1,cpositions = c(0, 0.2, 0.4),main = "Hazard ratio, ALL")
+
+
+
+
+```
+
+
+```{r write the selected features}
+CC_selected = CC[, pre_selectedvariables_lesion[selectedfeatureIDs]]
+CC_selected$followup = CC$followup
+CC_selected$BCR = CC$BCR
+CC_selected$bGG = CC$bGG
+CC_selected$pGG = CC$pGG
+CC_selected$PIRADS = CC$PIRADS
+CC_selected$PI_best = predict(best_fit, CC_selected, type=c("lp"))
+CC_selected$RadS = predict(fit_risk_score, CC_selected, type=c("response"))
+
+
+validation_selected = BCR_Independent[, pre_selectedvariables_lesion[selectedfeatureIDs]]
+validation_selected$followup = BCR_Independent$time
+validation_selected$BCR =  BCR_Independent$status
+validation_selected$bGG = BCR_Independent$bGG
+validation_selected$pGG = BCR_Independent$pGG
+validation_selected$PIRADS = BCR_Independent$PIRADS
+validation_selected$Decipher = BCR_Independent$Decipher
+validation_selected$CAPRA = BCR_Independent$CAPRA_pre
+validation_selected$CAPRAS = BCR_Independent$CAPRAS
+validation_selected$PI_best = predict(best_fit, validation_selected, type=c("lp"))
+validation_selected$RadS = predict(fit_risk_score, validation_selected, type=c("response"))
+write.csv(CC_selected, 'train.csv')
+write.csv(validation_selected, 'validation.csv')
+
+```
+```{r construct the nomogram RadClip,fig.height= 5, fig.width=7}
+
+BCR_all$RadS = Train_result$RadS 
+BCR_all$group1 = ifelse(BCR_all$time>=36,'long','short')
+BCR_Independent$RadS = BCR_Independent$RadS
+BCR_Independent$group1 <- ifelse(BCR_Independent$time>=36,'long','short')
+BCR_Independent$AGE = BCR_Independent$age
+nomoData = BCR_all
+
+dd <- datadist(nomoData)
+options(datadist = "dd")
+ 
+dstr2 <- svydesign(id = ~ 1, strata = ~group1 , data = nomoData)
+
+mynom <- svycox.nomogram(.design = dstr2, .model =
+Surv(time, status) ~  RadS+bGG+PSA, .data = nomoData, pred.at = 36, fun.lab = "Prob of 3 Yr DFS")  
+
+
+plot(mynom$nomog)
+nomoData$RadClip = predict(mynom$svy.cox,nomoData)
+
+```
+
+```{r evaluate RadClip on validation set,fig.height= 5, fig.width=7}
+BCR_Independent$RadClip = predict(mynom$svy.cox,BCR_Independent)
+BCR_Independent_CAPRA = BCR_Independent[!is.na(BCR_Independent$CAPRA_pre),]
+BCR_Independent_CAPRAS = BCR_Independent[!is.na(BCR_Independent$CAPRAS),]
+BCR_Independent$Decipher_High = BCR_Independent$Decipher>0.6
+
+fit_km_all <- survfit(Surv(time, status) ~ Decipher_High, data =  BCR_Independent)
+# Visualize with survminer
+ggsurvplot(fit_km_all, pval = TRUE, conf.int = TRUE,
+          risk.table = TRUE, # Add risk table
+          risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          surv.median.line = "hv", # Specify median survival
+          ggtheme = theme_bw(), # Change ggplot2 theme
+          palette = c("#E7B800", "#2E9FDF"))
+
+BCR_Independent$RadClip_High = BCR_Independent$RadClip>0.5 #70% 3 year bRFS according to the nomogram
+fit_km_all <- survfit(Surv(time, status) ~ RadClip_High, data = BCR_Independent)
+# Visualize with survminer
+ggsurvplot(fit_km_all, pval = TRUE, conf.int = TRUE,
+          risk.table = TRUE, # Add risk table
+          risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          surv.median.line = "hv", # Specify median survival
+          ggtheme = theme_bw(), # Change ggplot2 theme
+          palette = c("#E7B800", "#2E9FDF"))
+
+BCR_Independent$CAPRA_HIGH = BCR_Independent$CAPRA_pre>5
+fit_km_all <- survfit(Surv(time, status) ~ CAPRA_HIGH, data = BCR_Independent)
+# Visualize with survminer
+ggsurvplot(fit_km_all, pval = TRUE, conf.int = TRUE,
+          risk.table = TRUE, # Add risk table
+          risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          surv.median.line = "hv", # Specify median survival
+          ggtheme = theme_bw(), # Change ggplot2 theme
+          palette = c("#E7B800", "#2E9FDF"))
+
+BCR_Independent$CAPRAS_HIGH = BCR_Independent$CAPRAS>5
+fit_km_all <- survfit(Surv(time, status) ~ CAPRAS_HIGH, data = BCR_Independent)
+# Visualize with survminer
+ggsurvplot(fit_km_all, pval = TRUE, conf.int = TRUE,
+          risk.table = TRUE, # Add risk table
+          risk.table.col = "strata", # Change risk table color by groups
+          linetype = "strata", # Change line type by groups
+          surv.median.line = "hv", # Specify median survival
+          ggtheme = theme_bw(), # Change ggplot2 theme
+          palette = c("#E7B800", "#2E9FDF"))
+
+```
+```{r one to one CAPRA}
+
+covariates <- c("RadClip",'CAPRA_pre')
+variables = paste(covariates , collapse="+")
+
+var_models_BCR <- coxph(as.formula(paste("Surv(time, status)~", variables) ),data = BCR_Independent_CAPRA)
+summary(var_models_BCR)
+
+univ_formulas <- sapply(covariates,
+                        function(x) as.formula(paste('Surv(time, status)~', x)))
+                        
+univ_models <- lapply( univ_formulas, function(x){coxph(x, data =BCR_Independent_CAPRA)})#[which(!is.na(BCR_Independent$Decipher)),]
+# Extract data 
+univ_results <- lapply(univ_models,
+                       function(x){ 
+                          x <- summary(x)
+                          p.value<-signif(x$logtest["pvalue"], digits=2)
+                          wald.test<-signif(x$wald["test"], digits=2)
+                          beta<-signif(x$coef[1], digits=2);#coeficient beta
+                          
+                          HR <-signif(x$coef[2], digits=2);#exp(beta)
+                          HR.confint.lower <- signif(x$conf.int[,"lower .95"], 2)
+                          HR.confint.upper <- signif(x$conf.int[,"upper .95"],2)
+                          HR <- paste0(HR, " (", 
+                                       HR.confint.lower, "-", HR.confint.upper, ")")
+                          Cindex <- signif(x$concordance[1], digits=2)
+                          Cindex_se <- x$concordance[2]
+                          Cindex_up <- signif(x$concordance[1]+1.96*Cindex_se, digits=2)
+                          Cindex_low <- signif(x$concordance[1]-1.96*Cindex_se, digits=2)
+                          Cindex_all <- paste0(Cindex, " (", 
+                                       Cindex_low, "-", Cindex_up, ")")
+                          res<-c( HR,Cindex_all, p.value)
+                          names(res)<-c("HR (95% CI for HR)", "Cindex (95% CI for HR)", 
+                                        " Likelihood ratio p.value")
+                          return(res)
+                          #return(exp(cbind(coef(x),confint(x))))
+                         })
+
+res <- t(as.data.frame(univ_results, check.names = FALSE))
+as.data.frame(res)
+
+
+
+
+```
+
+
+
+```{r one to one CAPRAS}
+
+covariates <- c("RadClip","CAPRAS")
+variables = paste(covariates , collapse="+")
+
+var_models_BCR <- coxph(as.formula(paste("Surv(time, status)~", variables) ),data = BCR_Independent_CAPRAS)
+summary(var_models_BCR)
+
+
+univ_formulas <- sapply(covariates,
+                        function(x) as.formula(paste('Surv(time, status)~', x)))
+                        
+univ_models <- lapply( univ_formulas, function(x){coxph(x, data =BCR_Independent_CAPRAS)})
+# Extract data 
+univ_results <- lapply(univ_models,
+                       function(x){ 
+                          x <- summary(x)
+                          p.value<-signif(x$logtest["pvalue"], digits=2)
+                          wald.test<-signif(x$wald["test"], digits=2)
+                          beta<-signif(x$coef[1], digits=2);#coeficient beta
+                          
+                          HR <-signif(x$coef[2], digits=2);#exp(beta)
+                          HR.confint.lower <- signif(x$conf.int[,"lower .95"], 2)
+                          HR.confint.upper <- signif(x$conf.int[,"upper .95"],2)
+                          HR <- paste0(HR, " (", 
+                                       HR.confint.lower, "-", HR.confint.upper, ")")
+                          Cindex <- signif(x$concordance[1], digits=2)
+                          Cindex_se <- x$concordance[2]
+                          Cindex_up <- signif(x$concordance[1]+1.96*Cindex_se, digits=2)
+                          Cindex_low <- signif(x$concordance[1]-1.96*Cindex_se, digits=2)
+                          Cindex_all <- paste0(Cindex, " (", 
+                                       Cindex_low, "-", Cindex_up, ")")
+                          res<-c( HR,Cindex_all, p.value)
+                          names(res)<-c("HR (95% CI for HR)", "Cindex (95% CI for HR)", 
+                                        " Likelihood ratio p.value")
+                          return(res)
+                          #return(exp(cbind(coef(x),confint(x))))
+                         })
+
+res <- t(as.data.frame(univ_results, check.names = FALSE))
+as.data.frame(res)
+
+```
+
+```{r one to one Decipher}
+
+covariates <- c("RadClip","Decipher","DecipherGroup")
+variables = paste(covariates , collapse="+")
+
+var_models_BCR <- coxph(as.formula(paste("Surv(time, status)~", variables) ),data = BCR_Independent)
+summary(var_models_BCR)
+
+univ_formulas <- sapply(covariates,
+                        function(x) as.formula(paste('Surv(time, status)~', x)))
+                        
+univ_models <- lapply( univ_formulas, function(x){coxph(x, data = BCR_Independent[which(!is.na(BCR_Independent$Decipher)),])})#[which(!is.na(BCR_Independent$Decipher)),]
+# Extract data 
+univ_results <- lapply(univ_models,
+                       function(x){ 
+                          x <- summary(x)
+                          p.value<-signif(x$logtest["pvalue"], digits=2)
+                          wald.test<-signif(x$wald["test"], digits=2)
+                          beta<-signif(x$coef[1], digits=2);#coeficient beta
+                          
+                          HR <-signif(x$coef[2], digits=2);#exp(beta)
+                          HR.confint.lower <- signif(x$conf.int[,"lower .95"], 2)
+                          HR.confint.upper <- signif(x$conf.int[,"upper .95"],2)
+                          HR <- paste0(HR, " (", 
+                                       HR.confint.lower, "-", HR.confint.upper, ")")
+                          Cindex <- signif(x$concordance[1], digits=2)
+                          Cindex_se <- x$concordance[2]
+                          Cindex_up <- signif(x$concordance[1]+1.96*Cindex_se, digits=2)
+                          Cindex_low <- signif(x$concordance[1]-1.96*Cindex_se, digits=2)
+                          Cindex_all <- paste0(Cindex, " (", 
+                                       Cindex_low, "-", Cindex_up, ")")
+                          res<-c( HR,Cindex_all, p.value)
+                          names(res)<-c("HR (95% CI for HR)", "Cindex (95% CI for HR)", 
+                                        " Likelihood ratio p.value")
+                          return(res)
+                          #return(exp(cbind(coef(x),confint(x))))
+                         })
+
+
+res <- t(as.data.frame(univ_results, check.names = FALSE))
+as.data.frame(res)
+
+
+```
+
+
+
+
+
+
+```{r decision curve,fig.height= 4, fig.width=6}
+train11 = BCR_Independent[!is.na(BCR_Independent$CAPRA_pre),]
+train11 = train11[!is.na(train11$CAPRAS),]
+
+coxmod = coxph(Surv(time, status) ~ RadClip, data=train11) 
+train11$RadClip = c(1- (summary(survfit(coxmod,newdata=train11),times=36)$surv))
+
+coxmod = coxph(Surv(time, status) ~ CAPRA_pre , data=train11) 
+train11$CAPRA = c(1- (summary(survfit(coxmod,newdata=train11),times=36)$surv))
+
+coxmod = coxph(Surv(time, status) ~  CAPRAS, data=train11) 
+train11$CAPRAS =c(1- (summary(survfit(coxmod,newdata=train11), times=36)$surv))
+
+#coxmod = coxph(Surv(time, status) ~ Decipher, data=train11) 
+#train11$Decipher = c(1- (summary(survfit(coxmod,newdata=train11), times=24)$surv)) 
+source('stdca.R')
+
+clinic = stdca(data=train11, outcome="status", ttoutcome="time", timepoint=36,
+               predictors=c("RadClip","CAPRA","CAPRAS"),cmprsk=TRUE, xstop=0.5, smooth=TRUE) 
+
+
+
+```
+
+```{r adverse pathology all}
+AdvPath_DATA = BCR_Independent_lesion
+AdvPath_DATA$PI_best = predict(best_fit, AdvPath_DATA, type=c("lp"))
+AdvPath_DATA$RadS = predict(fit_risk_score, AdvPath_DATA, type=c("response"))
+
+all_label = unique(c(which(AdvPath_DATA$LVI==1),which(AdvPath_DATA$SVI==1),which(AdvPath_DATA$EPE==1)))
+AdvPath_DATA$advPath = 0
+AdvPath_DATA$advPath[all_label] = 1
+AdvPath_DATA$age = AdvPath_DATA$AGE
+AdvPath_DATA$CAPRA = CAPRApre_CAL(AdvPath_DATA)
+AdvPath_DATA$PSM = AdvPath_DATA$SM
+AdvPath_DATA$LNI = AdvPath_DATA$LVI
+AdvPath_DATA$CAPRAS = CAPRAS_CAL(AdvPath_DATA)
+AdvPath_DATA$RadClip = predict(mynom$svy.cox,AdvPath_DATA, se = FALSE, type = c("lp"))
+
+
+
+covariates = c("RadClip","CAPRA","Decipher")
+univ_formulas <- sapply(covariates,
+                        function(x) as.formula(paste('advPath~', x)))
+                        
+univ_models <- lapply( univ_formulas, function(x){glm(x,family= binomial,data = AdvPath_DATA)})
+# Extract data 
+univ_results <- lapply(univ_models,
+                       function(x){ 
+                          xx <- anova(x,test="Chisq")
+                          p.value<-signif(xx$`Pr(>Chi)`[2], digits=2)
+                          p <- predict(x,AdvPath_DATA,type=c("response"))
+                          pr<- roc(AdvPath_DATA$advPath,p,ci = TRUE)
+                          auc <- signif(pr$auc[1], digits=2)
+                          ci <- pr$ci
+                          auc <- paste0(auc, " (", 
+                                       signif(ci[1],digits=2), "-", signif(ci[3],digits=2), ")")
+                          res<-c(auc, p.value)
+                          names(res)<-c("AUC (95% CI for HR)",
+                                        "p.value")
+                          return(res)
+                          #return(exp(cbind(coef(x),confint(x))))
+                         })
+
+res <- t(as.data.frame(univ_results, check.names = FALSE))
+as.data.frame(res)
+
+
+
+```
+
+```{r adverse pathology EPE}
+covariates = c("RadClip","CAPRA","Decipher")
+univ_formulas <- sapply(covariates,
+                        function(x) as.formula(paste('EPE~', x)))
+                        
+univ_models <- lapply( univ_formulas, function(x){glm(x,family= binomial,data = AdvPath_DATA)})
+# Extract data 
+univ_results <- lapply(univ_models,
+                       function(x){ 
+                          xx <- anova(x,test="Chisq")
+                          p.value<-signif(xx$`Pr(>Chi)`[2], digits=2)
+                          p <- predict(x,AdvPath_DATA,type=c("response"))
+                          pr<- roc(AdvPath_DATA$EPE,p,ci = TRUE)
+                          auc <- signif(pr$auc[1], digits=2)
+                          ci <- pr$ci
+                          auc <- paste0(auc, " (", 
+                                       signif(ci[1],digits=2), "-", signif(ci[3],digits=2), ")")
+                          res<-c(auc, p.value)
+                          names(res)<-c("AUC (95% CI for HR)",
+                                        "p.value")
+                          return(res)
+                          #return(exp(cbind(coef(x),confint(x))))
+                         })
+
+res <- t(as.data.frame(univ_results, check.names = FALSE))
+as.data.frame(res)
+
+
+
+```
+
+
+```{r adverse pathology SVI}
+
+covariates = c("RadClip","CAPRA","Decipher")
+univ_formulas <- sapply(covariates,
+                        function(x) as.formula(paste('SVI~', x)))
+                        
+univ_models <- lapply( univ_formulas, function(x){glm(x,family= binomial,data = AdvPath_DATA)})
+# Extract data 
+univ_results <- lapply(univ_models,
+                       function(x){ 
+                          xx <- anova(x,test="Chisq")
+                          p.value<-signif(xx$`Pr(>Chi)`[2], digits=2)
+                          p <- predict(x,AdvPath_DATA,type=c("response"))
+                          pr<- roc(AdvPath_DATA$SVI,p,ci = TRUE)
+                          auc <- signif(pr$auc[1], digits=2)
+                          ci <- pr$ci
+                          auc <- paste0(auc, " (", 
+                                       signif(ci[1],digits=2), "-", signif(ci[3],digits=2), ")")
+                          res<-c(auc, p.value)
+                          names(res)<-c("AUC (95% CI for HR)",
+                                        "p.value")
+                          return(res)
+                          #return(exp(cbind(coef(x),confint(x))))
+                         })
+
+res <- t(as.data.frame(univ_results, check.names = FALSE))
+as.data.frame(res)
+
+
+
+```
+
+
+```{r adverse pathology LVI}
+covariates = c("RadClip","CAPRA","Decipher")
+univ_formulas <- sapply(covariates,
+                        function(x) as.formula(paste('LVI~', x)))
+                        
+univ_models <- lapply( univ_formulas, function(x){glm(x,family= binomial,data = AdvPath_DATA)})
+# Extract data 
+univ_results <- lapply(univ_models,
+                       function(x){ 
+                          xx <- anova(x,test="Chisq")
+                          p.value<-signif(xx$`Pr(>Chi)`[2], digits=2)
+                          p <- predict(x,AdvPath_DATA,type=c("response"))
+                          pr<- roc(AdvPath_DATA$LVI,p,ci = TRUE)
+                          auc <- signif(pr$auc[1], digits=2)
+                          ci <- pr$ci
+                          auc <- paste0(auc, " (", 
+                                       signif(ci[1],digits=2), "-", signif(ci[3],digits=2), ")")
+                          res<-c(auc, p.value)
+                          names(res)<-c("AUC (95% CI for HR)",
+                                        "p.value")
+                          return(res)
+                          #return(exp(cbind(coef(x),confint(x))))
+                         })
+
+res <- t(as.data.frame(univ_results, check.names = FALSE))
+as.data.frame(res)
+
+
+
+```
